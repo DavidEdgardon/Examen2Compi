@@ -3,7 +3,7 @@
 #include <sstream>
 #include <set>
 #include "asm.h"
-
+#include <map>
 
 const char * floatTemps[] = {"$f0","$f1","$f2","$f3","$f4","$f5","$f6","$f7","$f8","$f9","$f10","$f11","$f12","$f13","$f14","$f15","$f16","$f17","$f18","$f19","$f20","$f21","$f22","$f23","$f24","$f25","$f26","$f27","$f28","$f29","$f30","$f31"};
 
@@ -11,6 +11,17 @@ const char * floatTemps[] = {"$f0","$f1","$f2","$f3","$f4","$f5","$f6","$f7","$f
 #define FLOAT_TEMP_COUNT 32
 set<string> intTempMap;
 set<string> floatTempMap;
+
+class VariableInfo{
+    public:
+        VariableInfo(int offset, bool isParameter){
+            this->offset = offset;
+            this->isParameter = isParameter;
+        }
+        int offset;
+        bool isParameter;
+};
+
 map<string, VariableInfo *> codeGenerationVars;
 
 extern Asm assemblyFile;
@@ -44,16 +55,6 @@ string retrieveState(string state){
     return state;
 }
 
-class VariableInfo{
-    public:
-        VariableInfo(int offset, bool isParameter){
-            this->offset = offset;
-            this->isParameter = isParameter;
-        }
-        int offset;
-        bool isParameter;
-};
-
 string getFloatTemp(){
     for (int i = 0; i < FLOAT_TEMP_COUNT; i++)
     {
@@ -68,6 +69,23 @@ string getFloatTemp(){
 
 void releaseFloatTemp(string temp){
     floatTempMap.erase(temp);
+}
+
+string floatArithmetic(Code &leftCode, Code &rightCode, Code &code, char op){
+    stringstream ss;
+    code.place = getFloatTemp();
+    switch (op)
+    {
+        case '-':
+            ss << "sub.s "<< code.place<<", "<< leftCode.place <<", "<< rightCode.place;
+            break;
+        case '/':
+            ss << "div.s "<< code.place<<", "<< leftCode.place <<", "<< rightCode.place;
+            break;
+        default:
+            break;
+    }
+    return ss.str();
 }
 
 void FloatExpr::genCode(Code &code){
@@ -107,11 +125,14 @@ void DivExpr::genCode(Code &code){
 void IdExpr::genCode(Code &code){
     string floatTemp = getFloatTemp();
     code.place = floatTemp;
-    code.code = "l.s "+ floatTemp + ", " + to_string(codeGenerationVars[this->value]->offset) +"($sp)\n";
+    code.code = "l.s "+ floatTemp + ", " + to_string(codeGenerationVars[this->id]->offset) +"($sp)\n";
 }
 
 string ExprStatement::genCode(){
-    return "Expr statement code generation\n";
+    Code exprCode;
+    this->expr->genCode(exprCode);
+    releaseFloatTemp(exprCode.place);
+    return exprCode.code;
 }
 
 string IfStatement::genCode(){
@@ -122,9 +143,9 @@ string IfStatement::genCode(){
     string floatTemp = getFloatTemp();
     this->conditionalExpr->genCode(exprCode);
     code << exprCode.code << endl;
-    ss << "li.s " << floatTemp <<", 0.0"<<endl;
-    ss << "c.eq.s " << exprCode.place << ", " << floatTemp + "\n";
-    ss << "bc1t " << elseLabel  + "\n";
+    code << "li.s " << floatTemp <<", 0.0"<<endl;
+    code << "c.eq.s " << exprCode.place << ", " << floatTemp + "\n";
+    code << "bc1t " << elseLabel  + "\n";
 
     list<Statement *>::iterator iTrue = this->trueStatement.begin(); //IF
     while (iTrue != this->trueStatement.end()){
@@ -169,24 +190,35 @@ void MethodInvocationExpr::genCode(Code &code){
     list<Code>::iterator placesIt = codes.begin();
     while (placesIt != codes.end())
     {
-        releaseRegister((*placesIt).place);
+        releaseFloatTemp((*placesIt).place);
         ss << "mfc1 $a"<<i<<", "<< (*placesIt).place<<endl;
         i++;
         placesIt++;
     }
 
-    ss<< "jal "<< this->id->id<<endl;
+    ss<< "jal "<< this->id<<endl;
     string reg;
     reg = getFloatTemp();
     ss << "mtc1 $v0, "<< reg<<endl;
     
     code.code = ss.str();
     code.place = reg;
-    code.type = methods[this->id->id]->returnType;
 }
 
 string AssignationStatement::genCode(){
-    return "Assignation statement code generation\n";
+    if(codeGenerationVars[this->id] == 0){
+        codeGenerationVars[this->id] = new VariableInfo(globalStackPointer,false);
+        globalStackPointer+=4;
+    }
+    Code code;
+    Code rightSideCode;
+    stringstream ss;
+    this->value->genCode(rightSideCode);
+    ss<< rightSideCode.code <<endl;
+    ss<< "s.s "<< rightSideCode.place <<", "<<codeGenerationVars[this->id]->offset<<"($sp)"<<endl;
+    releaseFloatTemp(rightSideCode.place);
+    code.code = ss.str();
+    return code.code;
 }
 
 void GteExpr::genCode(Code &code){
@@ -206,8 +238,8 @@ void GteExpr::genCode(Code &code){
     ss << " j " << finalLabel <<endl;
     ss<< label <<":"<<endl<< "add.s " << temp << ", $zero, 1.0"<<endl<<finalLabel<<":"<<endl;
     code.place = temp;
-    releaseRegister(leftSideCode.place);
-    releaseRegister(rightSideCode.place);
+    releaseFloatTemp(leftSideCode.place);
+    releaseFloatTemp(rightSideCode.place);
     code.code = ss.str();
 }
 
@@ -228,8 +260,8 @@ void LteExpr::genCode(Code &code){
     ss << " j " << finalLabel <<endl;
     ss<< label <<":"<<endl<< "add.s " << temp << ", $zero, 1.0"<<endl<<finalLabel<<":"<<endl;
     code.place = temp;
-    releaseRegister(leftSideCode.place);
-    releaseRegister(rightSideCode.place);
+    releaseFloatTemp(leftSideCode.place);
+    releaseFloatTemp(rightSideCode.place);
     code.code = ss.str();
 }
 
@@ -239,9 +271,6 @@ void EqExpr::genCode(Code &code){
     this->expr1->genCode(leftSideCode);
     this->expr2->genCode(rightSideCode);
     stringstream ss;
-    code.type = FLOAT;
-    toFloat(leftSideCode);
-    toFloat(rightSideCode);
     ss << leftSideCode.code << endl
     << rightSideCode.code <<endl;
     string temp = getFloatTemp();
@@ -253,15 +282,19 @@ void EqExpr::genCode(Code &code){
     ss << " j " << finalLabel <<endl;
     ss<< label <<":"<<endl<< "add.s " << temp << ", $zero, 1.0"<<endl<<finalLabel<<":"<<endl;
     code.place = temp;
-    releaseRegister(leftSideCode.place);
-    releaseRegister(rightSideCode.place);
+    releaseFloatTemp(leftSideCode.place);
+    releaseFloatTemp(rightSideCode.place);
   
     code.code = ss.str();
 
 }
 
 void ReadFloatExpr::genCode(Code &code){
-    
+    stringstream ss;
+    ss<< "li $v0, 6"<<
+    endl<< "syscall"<<endl;
+    code.code = ss.str();
+    code.place = "$f0";
 }
 
 string PrintStatement::genCode(){
@@ -281,7 +314,7 @@ string PrintStatement::genCode(){
             << "li $v0, 2"<<endl
             << "syscall"<<endl;
              
-            releaseRegister(exprCode.place);
+            releaseFloatTemp(exprCode.place);
             ite++;
     }
   
@@ -290,7 +323,7 @@ string PrintStatement::genCode(){
 
 string ReturnStatement::genCode(){Code exprCode;
     this->expr->genCode(exprCode);
-    releaseRegister(exprCode.place);
+    releaseFloatTemp(exprCode.place);
     stringstream ss;
     ss << exprCode.code << endl;
     ss<< "mfc1 $v0, "<<exprCode.place<<endl;
@@ -298,7 +331,7 @@ string ReturnStatement::genCode(){Code exprCode;
 }
 
 string MethodDefinitionStatement::genCode(){
-    if(this->stmts == NULL)
+    if(this->stmts.size() == 0)
         return "";
 
     int stackPointer = 4;
@@ -308,7 +341,7 @@ string MethodDefinitionStatement::genCode(){
     string state = saveState();
     code <<state<<endl;
     if(this->params.size() > 0){
-        list<string *>::iterator it = this->params.begin();
+        list<string>::iterator it = this->params.begin();
         for(int i = 0; i< this->params.size(); i++){
             code << "sw $a"<<i<<", "<< stackPointer<<"($sp)"<<endl;
             codeGenerationVars[(*it)] = new VariableInfo(stackPointer, true);
@@ -319,7 +352,7 @@ string MethodDefinitionStatement::genCode(){
     }
     list<Statement *>::iterator statem = this->stmts.begin();
     while (statem != this->stmts.end()){
-        Statement * dec = *itFalse;
+        Statement * dec = *statem;
         if(dec != NULL){
             code<<dec->genCode() << endl;
         }
@@ -337,19 +370,3 @@ string MethodDefinitionStatement::genCode(){
     return result;
 }
 
-string floatArithmetic(Code &leftCode, Code &rightCode, Code &code, char op){
-    stringstream ss;
-    code.place = getFloatTemp();
-    switch (op)
-    {
-        case '-':
-            ss << "sub.s "<< code.place<<", "<< leftCode.place <<", "<< rightCode.place;
-            break;
-        case '/':
-            ss << "div.s "<< code.place<<", "<< leftCode.place <<", "<< rightCode.place;
-            break;
-        default:
-            break;
-    }
-    return ss.str();
-}
