@@ -1,0 +1,2 @@
+let float gcd(a, b) = if a == 0.0 then return b endif; if b == 0.0 then return a endif; if a == b then return a endif; if a > b then return gcd(a-b, b) endif; return gcd(a, b-a)
+let main() = a = readFloat();b = readFloat(); printf("resultado =",gcd(a,b))

@@ -1,0 +1,2 @@
+let test (a, b) = printf("a+b=", a+b); printf("a/b=", a/b); printf("a>b=", a>b); printf("a<b=", a<b)
+let main() = a = readFloat();b = readFloat(); test(a,b)

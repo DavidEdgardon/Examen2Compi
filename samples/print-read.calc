@@ -1,0 +1,6 @@
+a = readFloat()
+b = readFloat()
+printf("a+b=", a-b)
+printf("a>b=", a>b)
+printf("a<b=", a<b)
+printf("a==b=", a==b)
